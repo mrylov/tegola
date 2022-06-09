@@ -17,6 +17,20 @@ import (
 	"github.com/go-spatial/tegola/provider"
 )
 
+const (
+	bboxToken             = "!BBOX!"
+	zoomToken             = "!ZOOM!"
+	xToken                = "!X!"
+	yToken                = "!Y!"
+	zToken                = "!Z!"
+	scaleDenominatorToken = "!SCALE_DENOMINATOR!"
+	pixelWidthToken       = "!PIXEL_WIDTH!"
+	pixelHeightToken      = "!PIXEL_HEIGHT!"
+	idFieldToken          = "!ID_FIELD!"
+	geomFieldToken        = "!GEOM_FIELD!"
+	geomTypeToken         = "!GEOM_TYPE!"
+)
+
 // isMVT will return true if the provider is MVT based
 func isMVT(providerType string) bool {
 	return providerType == MVTProviderType
@@ -69,7 +83,7 @@ func genGeomField(name string, providerType string) string {
 
 func getLayerSQL(tblname string) string {
 	quotedTblName := quoteTableName(tblname)
-	return fmt.Sprintf(fldsSQL, quotedTblName)
+	return fmt.Sprintf(`SELECT * FROM %[1]v LIMIT 0;`, quotedTblName)
 }
 
 func getLayerRows(pool *connectionPoolCollector, l *Layer, sql string, extent *geom.Extent, withBBox bool) (*sql.Rows, error) {
@@ -162,9 +176,9 @@ func genSQL(l *Layer, tblName string, fieldNames []string, buffer bool, provider
 		fieldNames = append(fieldNames, quoteIdentifier(l.idField))
 	}
 
-	selectClause := strings.Join(fieldNames, ", ")
+	stdSQL := `SELECT %[1]v FROM %[2]v WHERE ` + bboxToken
 
-	return fmt.Sprintf(stdSQL, selectClause, quoteTableName(tblName)), nil
+	return fmt.Sprintf(stdSQL, strings.Join(fieldNames, ", "), quoteTableName(tblName)), nil
 }
 
 func genMVTSQL(l *Layer, fields []string, buffer uint, clipGeometry bool) (sql string, err error) {
@@ -192,20 +206,6 @@ func genMVTSQL(l *Layer, fields []string, buffer uint, clipGeometry bool) (sql s
 	}
 	return sql, nil
 }
-
-const (
-	bboxToken             = "!BBOX!"
-	zoomToken             = "!ZOOM!"
-	xToken                = "!X!"
-	yToken                = "!Y!"
-	zToken                = "!Z!"
-	scaleDenominatorToken = "!SCALE_DENOMINATOR!"
-	pixelWidthToken       = "!PIXEL_WIDTH!"
-	pixelHeightToken      = "!PIXEL_HEIGHT!"
-	idFieldToken          = "!ID_FIELD!"
-	geomFieldToken        = "!GEOM_FIELD!"
-	geomTypeToken         = "!GEOM_TYPE!"
-)
 
 func getBBoxCoordinates(extent *geom.Extent, srid uint64) (geom.Point, geom.Point, error) {
 	// TODO: it's currently assumed the tile will always be in WebMercator. Need to support different projections
@@ -280,14 +280,6 @@ func replaceTokens(dbVersion uint, sql string, lyr *Layer, tile provider.Tile, w
 	uppercaseTokenSQL := uppercaseTokens(sql)
 
 	return tokenReplacer.Replace(uppercaseTokenSQL), nil
-}
-
-var tokenRe = regexp.MustCompile("![a-zA-Z0-9_-]+!")
-
-//	uppercaseTokens converts all !tokens! to uppercase !TOKENS!. Tokens can
-//	contain alphanumerics, dash and underline chars.
-func uppercaseTokens(str string) string {
-	return tokenRe.ReplaceAllStringFunc(str, strings.ToUpper)
 }
 
 func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns []*sql.ColumnType) ([]FieldDescription, error) {
@@ -624,6 +616,14 @@ func convertToUInt64(v interface{}) (intv uint64, err error) {
 	default:
 		return intv, fmt.Errorf("unable to convert field into a uint64")
 	}
+}
+
+var tokenRe = regexp.MustCompile("![a-zA-Z0-9_-]+!")
+
+//	uppercaseTokens converts all !tokens! to uppercase !TOKENS!. Tokens can
+//	contain alphanumerics, dash and underline chars.
+func uppercaseTokens(str string) string {
+	return tokenRe.ReplaceAllStringFunc(str, strings.ToUpper)
 }
 
 // ctxErr will check if the supplied context has an error (i.e. context canceled)

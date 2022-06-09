@@ -3,7 +3,6 @@ package hana
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"net/url"
@@ -184,14 +183,6 @@ func (p *Provider) Collectors(prefix string, cfgFn func(configKey string) map[st
 }
 
 const (
-	// We quote the field and table names to prevent colliding with postgres keywords.
-	stdSQL = `SELECT %[1]v FROM %[2]v WHERE ` + bboxToken
-
-	// SQL to get the column names, without hitting the information_schema. Though it might be better to hit the information_schema.
-	fldsSQL = `SELECT * FROM %[1]v LIMIT 0;`
-)
-
-const (
 	DefaultURI             = ""
 	DefaultSRID            = tegola.WebMercator
 	DefaultMaxConn         = 100
@@ -257,15 +248,6 @@ type FieldDescription struct {
 	isFeatureId bool
 }
 
-func ConfigTLS(url.Values) (tls.Config, error) {
-	tlsConfig := tls.Config{
-		InsecureSkipVerify: false,
-		ServerName:         "",
-	}
-
-	return tlsConfig, nil
-}
-
 // CreateConnection creates a connection from config values
 func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 	uri, err := config.String(ConfigKeyURI, nil)
@@ -321,13 +303,13 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 	}
 
 	db := sql.OpenDB(connector)
-	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("Failed while establishing connection: %v", err)
-	}
-
 	db.SetMaxOpenConns(max_conn)
 	db.SetConnMaxIdleTime(max_conn_idle_time)
 	db.SetConnMaxLifetime(max_conn_life_time)
+
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("Failed while establishing connection: %v", err)
+	}
 
 	return db, nil
 }
@@ -843,10 +825,6 @@ func (p Provider) MVTForLayers(ctx context.Context, tile provider.Tile, layers [
 		}
 
 		totalSeconds += time.Since(now).Seconds()
-
-		if debugExecuteSQL {
-			log.Debugf("%s:%s: %v", EnvSQLDebugName, EnvSQLDebugExecute, sqlQuery)
-		}
 
 		if debugExecuteSQL {
 			log.Debugf("%s:%s: %v", EnvSQLDebugName, EnvSQLDebugExecute, sqlQuery)
