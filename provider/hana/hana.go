@@ -3,10 +3,11 @@ package hana
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
-	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/SAP/go-hdb/driver"
 	"github.com/go-spatial/geom"
 	"github.com/go-spatial/geom/encoding/wkb"
+	"github.com/go-spatial/geom/encoding/wkt"
 	"github.com/go-spatial/tegola"
 	"github.com/go-spatial/tegola/dict"
 	"github.com/go-spatial/tegola/internal/log"
@@ -43,8 +45,32 @@ func (c connectionPoolCollector) Query(query string) (*sql.Rows, error) {
 	return c.pool.Query(query)
 }
 
-func (c connectionPoolCollector) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	return c.pool.QueryContext(ctx, query, args...)
+func (c connectionPoolCollector) QueryContext(ctx context.Context, query string) (*sql.Rows, error) {
+	return c.pool.QueryContext(ctx, query)
+}
+
+func (c connectionPoolCollector) QueryContextWithBBox(ctx context.Context, query string, extent *geom.Extent, srid uint64, hasTileBounds bool) (*sql.Rows, error) {
+	ll, ur, err := getBBoxCoordinates(extent, srid)
+	if err != nil {
+		return nil, err
+	}
+
+	strLL, _ := wkt.Encode(ll)
+	lobLL := new(driver.Lob)
+	lobLL.SetReader(strings.NewReader(strLL))
+
+	strUR, _ := wkt.Encode(ur)
+	lobUR := new(driver.Lob)
+	lobUR.SetReader(strings.NewReader(strUR))
+
+	if hasTileBounds {
+		strTileBounds := fmt.Sprintf("LINESTRING(%v %v, %v %v)", ll.X(), ll.Y(), ur.X(), ur.Y())
+		lobBounds := new(driver.Lob)
+		lobBounds.SetReader(strings.NewReader(strTileBounds))
+		return c.pool.QueryContext(ctx, query, lobLL, lobUR, srid, strTileBounds)
+	} else {
+		return c.pool.QueryContext(ctx, query, lobLL, lobUR, srid)
+	}
 }
 
 func (c connectionPoolCollector) Describe(ch chan<- *prometheus.Desc) {
@@ -106,7 +132,8 @@ func (c *connectionPoolCollector) Collectors(prefix string, _ func(configKey str
 
 // Provider provides the HANA data provider.
 type Provider struct {
-	pool *connectionPoolCollector
+	dbVersion uint
+	pool      *connectionPoolCollector
 	// map of layer name and corresponding sql
 	layers     map[string]Layer
 	srid       uint64
@@ -158,8 +185,7 @@ func (p *Provider) Collectors(prefix string, cfgFn func(configKey string) map[st
 
 const (
 	// We quote the field and table names to prevent colliding with postgres keywords.
-	stdSQL = `SELECT %[1]v FROM %[2]v WHERE %[3]v.ST_IntersectsRectPlanar(ST_GeomFromText(?, ?), ST_GeomFromText(?, ?)) = 1`
-	mvtSQL = `SELECT %[1]v FROM %[2]v`
+	stdSQL = `SELECT %[1]v FROM %[2]v WHERE ` + bboxToken
 
 	// SQL to get the column names, without hitting the information_schema. Though it might be better to hit the information_schema.
 	fldsSQL = `SELECT * FROM %[1]v LIMIT 0;`
@@ -175,7 +201,6 @@ const (
 
 const (
 	ConfigKeyURI             = "uri"
-	ConfigKeyEncrypt         = "encrypt"
 	ConfigKeyMaxConn         = "max_connections"
 	ConfigKeyMaxConnIdleTime = "max_connection_idle_time"
 	ConfigKeyMaxConnLifetime = "max_connection_life_time"
@@ -188,43 +213,57 @@ const (
 	ConfigKeyGeomField       = "geometry_fieldname"
 	ConfigKeyGeomIDField     = "id_fieldname"
 	ConfigKeyGeomType        = "geometry_type"
+	ConfigKeyBuffer          = "buffer"
+	ConfigKeyClipGeometry    = "clip_geometry"
 )
 
-// validateURI validates for minimum requirements for a valid postgresql uri
-func validateURI(u string) error {
-	uri, err := url.Parse(u)
-	if err != nil {
-		return ErrInvalidURI{Err: err}
+type DataType byte
+
+const (
+	DtTinyint DataType = iota
+	DtSmallint
+	DtInteger
+	DtBigint
+	DtDecimal
+	DtSmalldecimal
+	DtReal
+	DtDouble
+	DtChar
+	DtVarchar
+	DtNChar
+	DtNVarchar
+	DtShorttext
+	DtAlphanum
+	DtBinary
+	DtVarbinary
+	DtDate
+	DtTime
+	DtTimestamp
+	DtSeconddate
+	DtClob
+	DtNClob
+	DtBlob
+	DtText
+	DtBoolean
+	DtSTPoint
+	DtSTGeometry
+	DtUnknown
+)
+
+type FieldDescription struct {
+	dataType    DataType
+	name        string
+	isGeometry  bool
+	isFeatureId bool
+}
+
+func ConfigTLS(url.Values) (tls.Config, error) {
+	tlsConfig := tls.Config{
+		InsecureSkipVerify: false,
+		ServerName:         "",
 	}
 
-	if uri.Scheme != "postgres" && uri.Scheme != "postgresql" {
-		return ErrInvalidURI{
-			Msg: fmt.Sprintf("invalid connection scheme (%v)", uri.Scheme),
-		}
-	}
-
-	if uri.User == nil {
-		return ErrInvalidURI{Msg: "auth credentials missing"}
-	}
-
-	host, port, err := net.SplitHostPort(uri.Host)
-	if err != nil {
-		return ErrInvalidURI{
-			Err: fmt.Errorf("splitting host port error: %w", err),
-		}
-	}
-
-	if host == "" {
-		return ErrInvalidURI{
-			Msg: fmt.Sprintf("address %v:%v: missing host in address", host, port),
-		}
-	}
-
-	if uri.Path == "" {
-		return ErrInvalidURI{Msg: "missing database"}
-	}
-
-	return nil
+	return tlsConfig, nil
 }
 
 // CreateConnection creates a connection from config values
@@ -234,44 +273,20 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 		return nil, err
 	}
 
-	url, err := url.Parse(uri)
-
-	host := url.Host
-	user := url.User.Username()
-	password, ok := url.User.Password()
-
-	if !ok {
-		return nil, ErrInvalidURI{Msg: "user password is missing"}
-	}
-
-	connector := driver.NewBasicAuthConnector(
-		host,
-		user,
-		password)
-
-	query := url.Query()
-
-	if query.Has(ConfigKeyEncrypt) {
-		// TODO
-		// tlsConfig := tls.Config{
-		//	InsecureSkipVerify: false,
-		//	ServerName:         HOST,
-		//}
-
-		//connector.SetTLSConfig(&tlsConfig)
-	}
+	u, err := url.Parse(uri)
+	params := u.Query()
 
 	max_conn := DefaultMaxConn
-	if query.Has(ConfigKeyMaxConn) {
-		max_conn, err = strconv.Atoi(query.Get(ConfigKeyMaxConn))
+	if params.Has(ConfigKeyMaxConn) {
+		max_conn, err = strconv.Atoi(params.Get(ConfigKeyMaxConn))
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	max_conn_idle_time, _ := time.ParseDuration(DefaultMaxConnIdleTime)
-	if query.Has(ConfigKeyMaxConnIdleTime) {
-		value := query.Get(ConfigKeyMaxConnIdleTime)
+	if params.Has(ConfigKeyMaxConnIdleTime) {
+		value := params.Get(ConfigKeyMaxConnIdleTime)
 		max_conn_idle_time, err = time.ParseDuration(value)
 		if err != nil {
 			return nil, ErrInvalidURI{Msg: "max_connection_idle_time value is incorrect"}
@@ -279,12 +294,30 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 	}
 
 	max_conn_life_time, _ := time.ParseDuration(DefaultMaxConnLifetime)
-	if query.Has(ConfigKeyMaxConnLifetime) {
-		value := query.Get(ConfigKeyMaxConnLifetime)
+	if params.Has(ConfigKeyMaxConnLifetime) {
+		value := params.Get(ConfigKeyMaxConnLifetime)
 		max_conn_idle_time, err = time.ParseDuration(value)
 		if err != nil {
 			return nil, ErrInvalidURI{Msg: "max_conn_life_time value is incorrect"}
 		}
+	}
+
+	// We construct a new uri that only contains parameters supported by the HANA driver.
+	// Otherwise, driver.NewDSNConnector returns an error.
+	newParams := url.Values{}
+	arrParamNames := [6]string{driver.DSNLocale, driver.DSNFetchSize, driver.DSNTimeout, driver.DSNTLSInsecureSkipVerify, driver.DSNTLSRootCAFile, driver.DSNTLSServerName}
+	for i := 0; i < len(arrParamNames); i++ {
+		pname := arrParamNames[i]
+		if params.Has(pname) {
+			newParams.Add(pname, params.Get(pname))
+		}
+	}
+
+	newUri := fmt.Sprintf("%v://%v@%v?", u.Scheme, u.User.String(), u.Host) + newParams.Encode()
+
+	connector, err := driver.NewDSNConnector(newUri)
+	if err != nil {
+		return nil, err
 	}
 
 	db := sql.OpenDB(connector)
@@ -326,14 +359,25 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 		return nil, err
 	}
 
+	var dbVersion string
+	if err := conn.QueryRow(`SELECT VERSION FROM "SYS"."M_DATABASE"`).Scan(&dbVersion); err != nil {
+		return nil, err
+	}
+
+	majorVersion, _ := strconv.Atoi(strings.Split(dbVersion, ".")[0])
+	if isMVT(providerType) && majorVersion != 4 {
+		return nil, fmt.Errorf("MVT provider is only available in HANA Cloud")
+	}
+
 	srid := DefaultSRID
 	if srid, err = config.Int(ConfigKeySRID, &srid); err != nil {
 		return nil, err
 	}
 
 	p := Provider{
-		srid: uint64(srid),
-		pool: &connectionPoolCollector{pool: conn},
+		dbVersion: uint(majorVersion),
+		srid:      uint64(srid),
+		pool:      &connectionPoolCollector{pool: conn},
 	}
 
 	layers, err := config.MapSlice(ConfigKeyLayers)
@@ -425,9 +469,9 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 			// convert !BOX! (MapServer) and !bbox! (Mapnik) to !BBOX! for compatibility
 			sql := strings.Replace(strings.Replace(sql, "!BOX!", "!BBOX!", -1), "!bbox!", "!BBOX!", -1)
 			// make sure that the sql has a !BBOX! token
-			//if !strings.Contains(sql, bboxToken) {
-			//	return nil, fmt.Errorf("SQL for layer (%v) %v is missing required token: %v", i, lName, bboxToken)
-			//}
+			if !strings.Contains(sql, bboxToken) {
+				return nil, fmt.Errorf("SQL for layer (%v) %v is missing required token: %v", i, lName, bboxToken)
+			}
 			if !strings.Contains(sql, "*") {
 				if !strings.Contains(sql, geomfld) {
 					return nil, fmt.Errorf("SQL for layer (%v) %v does not contain the geometry field: %v", i, lName, geomfld)
@@ -442,9 +486,38 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 			// Tablename and Fields will be used to build the query.
 			// We need to do some work. We need to check to see Fields contains the geom and gid fields
 			// and if not add them to the list. If Fields list is empty/nil we will use '*' for the field list.
-			l.sql, err = genSQL(&l, p.pool, tblName, fields, true, providerType)
+			if len(fields) == 0 {
+				fields, err = getTableFieldNames(p.pool, &l, tblName)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+			l.sql, err = genSQL(&l, tblName, fields, true, providerType)
 			if err != nil {
 				return nil, fmt.Errorf("could not generate sql, for layer(%v): %w", lName, err)
+			}
+		}
+
+		l.fields, err = getLayerFields(p.pool, &l, l.sql)
+		if err != nil {
+			return nil, err
+		}
+
+		if isMVT(providerType) {
+			var buffer uint = 256
+			if buffer, err = layer.Uint(ConfigKeyBuffer, &buffer); err != nil {
+				return nil, err
+			}
+
+			var clipGeom bool = true
+			if clipGeom, err = layer.Bool(ConfigKeyClipGeometry, &clipGeom); err != nil {
+				return nil, err
+			}
+
+			l.sql, err = genMVTSQL(&l, getFieldNames(l.fields), buffer, clipGeom)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -501,7 +574,65 @@ func (p Provider) setLayerGeomType(l *Layer, geomType string) error {
 // inspectLayerGeomType sets the geomType field on the layer by running the SQL
 // and reading the geom type in the result set
 func (p Provider) inspectLayerGeomType(l *Layer) error {
-	return nil
+	var err error
+
+	re := regexp.MustCompile(`(?i)ST_AsBinary`)
+	sqlQuery := re.ReplaceAllString(l.sql, "ST_GeometryType")
+
+	// we only need a single result set to sniff out the geometry type
+	sqlQuery = fmt.Sprintf("%v LIMIT 1", sqlQuery)
+
+	// if a !ZOOM! token exists, all features could be filtered out so we don't have a geometry to inspect it's type.
+	// address this by replacing the !ZOOM! token with an ANY statement which includes all zooms
+	sqlQuery = strings.Replace(sqlQuery, "!ZOOM!", "ANY('{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24}')", 1)
+
+	// we need a tile to run our sql through the replacer
+	tile := provider.NewTile(0, 0, 0, 64, tegola.WebMercator)
+
+	withBBox := strings.Contains(l.sql, bboxToken)
+	// normal replacer
+	sqlQuery, err = replaceTokens(p.dbVersion, sqlQuery, l, tile, true)
+	if err != nil {
+		return err
+	}
+
+	extent, _ := tile.Extent()
+	rows, err := getLayerRows(p.pool, l, sqlQuery, extent, withBBox)
+	if err != nil {
+		return err
+	}
+
+	defer rows.Close()
+
+	columns, err := rows.ColumnTypes()
+	if err != nil {
+		return err
+	}
+
+	fields, err := getFieldDescriptions(l.Name(), l.GeomFieldName(), l.IDFieldName(), columns)
+	rowValues := make([]interface{}, len(fields))
+
+	for rows.Next() {
+		setupRowValues(fields, rowValues)
+
+		err := rows.Scan(rowValues...)
+		if err != nil {
+			return fmt.Errorf("error running layer (%v) SQL (%v): %w", l, sqlQuery, err)
+		}
+
+		for i := range rowValues {
+			if rowValues[i] == nil || fields[i].name != l.GeomFieldName() {
+				continue
+			}
+
+			value := *(rowValues[i].(*sql.NullString))
+			p.setLayerGeomType(l, strings.Trim(value.String, "ST_"))
+
+			break
+		}
+	}
+
+	return rows.Err()
 }
 
 // Layer fetches an individual layer from the provider, if it's configured
@@ -543,39 +674,23 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 		return ErrLayerNotFound{layer}
 	}
 
-	srid := plyr.SRID()
-	withBuffer := true
-
-	minPt, maxPt, err := getTileBBox(srid, tile, withBuffer)
-
-	sql, err := replaceTokens(plyr.sql, &plyr, tile, withBuffer)
-	if err := ctxErr(ctx, err); err != nil {
-		return fmt.Errorf("error replacing layer tokens for layer (%v) SQL (%v): %w", layer, sql, err)
+	sqlQuery, err := replaceTokens(p.dbVersion, plyr.sql, &plyr, tile, true)
+	if err != nil {
+		return fmt.Errorf("error replacing layer tokens for layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 	}
 
 	if debugExecuteSQL {
-		log.Debugf("TEGOLA_SQL_DEBUG:EXECUTE_SQL for layer (%v): %v", layer, sql)
-	}
-
-	// context check
-	if err := ctx.Err(); err != nil {
-		return err
+		log.Debugf("TEGOLA_SQL_DEBUG:EXECUTE_SQL for layer (%v): %v", layer, sqlQuery)
 	}
 
 	now := time.Now()
 
-	strLL := fmt.Sprintf("POINT(%g %g)", minPt.X(), minPt.Y())
-	lobLL := &driver.Lob{}
-	lobLL.SetReader(strings.NewReader(strLL))
-
-	strUR := fmt.Sprintf("POINT(%g %g)", maxPt.X(), maxPt.Y())
-	lobUR := &driver.Lob{}
-	lobUR.SetReader(strings.NewReader(strUR))
-
-	rows, err := p.pool.QueryContext(ctx, sql, lobLL, srid, lobUR, srid)
+	extent, _ := tile.BufferedExtent()
+	srid := plyr.SRID()
+	rows, err := p.pool.QueryContextWithBBox(ctx, sqlQuery, extent, srid, false)
 
 	if err := ctxErr(ctx, err); err != nil {
-		return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sql, err)
+		return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 	}
 
 	if p.queryHistogramSeconds != nil {
@@ -595,32 +710,10 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 	defer rows.Close()
 
 	if err := ctxErr(ctx, err); err != nil {
-		return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sql, err)
+		return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 	}
 
-	columnDescs, err := rows.ColumnTypes()
-	if err != nil {
-		return err
-	}
-
-	// loop our field descriptions looking for the geometry field
-	var geomFieldFound bool
-	for i := range columnDescs {
-		if columnDescs[i].Name() == plyr.GeomFieldName() {
-			geomFieldFound = true
-			break
-		}
-	}
-	if !geomFieldFound {
-		return ErrGeomFieldNotFound{
-			GeomFieldName: plyr.GeomFieldName(),
-			LayerName:     plyr.Name(),
-		}
-	}
-
-	numColumns := len(columnDescs)
-	rowBuffers := make([]*bytes.Buffer, numColumns)
-	rowValues := make([]interface{}, numColumns)
+	rowValues := make([]interface{}, len(plyr.FieldDescriptions()))
 
 	reportedLayerFieldName := ""
 	for rows.Next() {
@@ -629,15 +722,15 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 			return err
 		}
 
-		setupRowValues(columnDescs, rowValues, rowBuffers)
+		setupRowValues(plyr.FieldDescriptions(), rowValues)
 
 		// fetch row values
 		err := rows.Scan(rowValues...)
 		if err := ctxErr(ctx, err); err != nil {
-			return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sql, err)
+			return fmt.Errorf("error running layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 		}
 
-		gid, geobytes, tags, err := readRowValues(ctx, plyr.GeomFieldName(), plyr.IDFieldName(), columnDescs, rowValues, rowBuffers)
+		gid, geobytes, tags, err := readRowValues(ctx, plyr.FieldDescriptions(), rowValues)
 		if err := ctxErr(ctx, err); err != nil {
 			return fmt.Errorf("for layer (%v) %w", plyr.Name(), err)
 		}
@@ -678,6 +771,103 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 	}
 
 	return rows.Err()
+}
+
+func (p Provider) MVTForLayers(ctx context.Context, tile provider.Tile, layers []provider.Layer) ([]byte, error) {
+	var mapName string
+
+	{
+		mapNameVal := ctx.Value(observability.ObserveVarMapName)
+		if mapNameVal != nil {
+			// if it's not convertible to a string, we will ignore it.
+			mapName, _ = mapNameVal.(string)
+		}
+	}
+
+	var mvtBytes bytes.Buffer
+	var totalSeconds float64
+	totalSeconds = 0.0
+
+	for i := range layers {
+		layer := layers[i]
+		if debug {
+			log.Debugf("looking for layer: %v", layer)
+		}
+		l, ok := p.Layer(layer.Name)
+
+		if !ok {
+			// Should we error here, or have a flag so that we don't
+			// spam the user?
+			log.Warnf("provider layer not found %v", layer.Name)
+		}
+		if debugLayerSQL {
+			log.Debugf("SQL for Layer(%v):\n%v\n", l.Name(), l.sql)
+		}
+		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, &l, tile, false)
+		if err := ctxErr(ctx, err); err != nil {
+			return nil, err
+		}
+
+		now := time.Now()
+
+		extent, _ := tile.Extent()
+		srid := l.SRID()
+		rows, err := p.pool.QueryContextWithBBox(ctx, sqlQuery, extent, srid, true)
+
+		if err := ctxErr(ctx, err); err != nil {
+			return []byte{}, err
+		}
+
+		defer rows.Close()
+
+		if err := ctxErr(ctx, err); err != nil {
+			return []byte{}, err
+		}
+
+		lob := &driver.Lob{}
+		lob.SetWriter(new(bytes.Buffer))
+
+		if rows.Next() {
+			if err := ctx.Err(); err != nil {
+				return []byte{}, err
+			}
+
+			err = rows.Scan(lob)
+			if err := ctxErr(ctx, err); err != nil {
+				return []byte{}, err
+			}
+
+			mvtBytes.Write(lob.Writer().(*bytes.Buffer).Bytes())
+		} else {
+			return nil, fmt.Errorf("unable to read the result set for layer (%v)", l.Name())
+		}
+
+		totalSeconds += time.Since(now).Seconds()
+
+		if debugExecuteSQL {
+			log.Debugf("%s:%s: %v", EnvSQLDebugName, EnvSQLDebugExecute, sqlQuery)
+		}
+
+		if debugExecuteSQL {
+			log.Debugf("%s:%s: %v", EnvSQLDebugName, EnvSQLDebugExecute, sqlQuery)
+			if err != nil {
+				log.Errorf("%s:%s: returned error %v", EnvSQLDebugName, EnvSQLDebugExecute, err)
+			} else {
+				log.Debugf("%s:%s: returned %v bytes", EnvSQLDebugName, EnvSQLDebugExecute, lob.Writer().(*bytes.Buffer).Len())
+			}
+		}
+	}
+
+	if p.mvtProviderQueryHistogramSeconds != nil {
+		z, _, _ := tile.ZXY()
+		lbls := prometheus.Labels{
+			"z":        strconv.FormatUint(uint64(z), 10),
+			"map_name": mapName,
+		}
+		p.mvtProviderQueryHistogramSeconds.With(lbls).Observe(totalSeconds)
+	}
+
+	return mvtBytes.Bytes(), nil
 }
 
 // Close will close the Provider's database connectio

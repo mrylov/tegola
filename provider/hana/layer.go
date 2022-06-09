@@ -16,6 +16,8 @@ type Layer struct {
 	geomType geom.Geometry
 	// The SRID that the data in the table is stored in. This will default to WebMercator
 	srid uint64
+	// The description of fields in the sql query. Used only by the non-MVT provider
+	fields []FieldDescription
 }
 
 func (l Layer) Name() string {
@@ -36,4 +38,8 @@ func (l Layer) GeomFieldName() string {
 
 func (l Layer) IDFieldName() string {
 	return l.idField
+}
+
+func (l Layer) FieldDescriptions() []FieldDescription {
+	return l.fields
 }

@@ -7,7 +7,7 @@ import (
 
 func init() {
 	provider.Register(provider.TypeStd.Prefix()+Name, NewTileProvider, Cleanup)
-	//	provider.MVTRegister(provider.TypeMvt.Prefix()+Name, NewMVTTileProvider, Cleanup)
+	provider.MVTRegister(provider.TypeMvt.Prefix()+Name, NewMVTTileProvider, Cleanup)
 }
 
 const (
@@ -44,6 +44,6 @@ func NewTileProvider(config dict.Dicter) (provider.Tiler, error) {
 	return CreateProvider(config, ProviderType)
 }
 
-//func NewMVTTileProvider(config dict.Dicter) (provider.MVTTiler, error) {
-//	return CreateProvider(config, MVTProviderType)
-//}
+func NewMVTTileProvider(config dict.Dicter) (provider.MVTTiler, error) {
+	return CreateProvider(config, MVTProviderType)
+}
