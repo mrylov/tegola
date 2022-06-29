@@ -36,12 +36,8 @@ func (c connectionPoolCollector) Close() {
 	c.pool.Close()
 }
 
-func (c connectionPoolCollector) PrepareContext(ctx context.Context, query string) (*sql.Stmt, error) {
-	return c.pool.PrepareContext(ctx, query)
-}
-
-func (c connectionPoolCollector) Query(query string) (*sql.Rows, error) {
-	return c.pool.Query(query)
+func (c connectionPoolCollector) QueryRow(query string) *sql.Row {
+	return c.pool.QueryRow(query)
 }
 
 func (c connectionPoolCollector) QueryContext(ctx context.Context, query string) (*sql.Rows, error) {
@@ -184,7 +180,6 @@ func (p *Provider) Collectors(prefix string, cfgFn func(configKey string) map[st
 
 const (
 	DefaultURI             = ""
-	DefaultSRID            = tegola.WebMercator
 	DefaultMaxConn         = 100
 	DefaultMaxConnIdleTime = "30m"
 	DefaultMaxConnLifetime = "1h"
@@ -202,7 +197,7 @@ const (
 	ConfigKeySQL             = "sql"
 	ConfigKeyFields          = "fields"
 	ConfigKeyGeomField       = "geometry_fieldname"
-	ConfigKeyGeomIDField     = "id_fieldname"
+	ConfigKeyFeatureIDField  = "id_fieldname"
 	ConfigKeyGeomType        = "geometry_type"
 	ConfigKeyBuffer          = "buffer"
 	ConfigKeyClipGeometry    = "clip_geometry"
@@ -248,21 +243,38 @@ type FieldDescription struct {
 	isFeatureId bool
 }
 
-// CreateConnection creates a connection from config values
-func CreateConnection(config dict.Dicter) (*sql.DB, error) {
-	uri, err := config.String(ConfigKeyURI, nil)
+func OpenDB(uri string) (*sql.DB, error) {
+	u, err := url.Parse(uri)
 	if err != nil {
 		return nil, err
 	}
 
-	u, err := url.Parse(uri)
+	if u.Scheme != "hdb" {
+		return nil, ErrInvalidURI{Msg: fmt.Sprintf("invalid scheme '%v'", u.Scheme)}
+	}
 	params := u.Query()
+
+	supportedParams := []string{ConfigKeyMaxConn, ConfigKeyMaxConnIdleTime, ConfigKeyMaxConnLifetime, driver.DSNLocale, driver.DSNFetchSize, driver.DSNTimeout, driver.DSNTLSInsecureSkipVerify, driver.DSNTLSRootCAFile, driver.DSNTLSServerName}
+	for k := range params {
+		found := false
+		for i := 0; i < len(supportedParams); i++ {
+			pname := supportedParams[i]
+			if k == pname {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil, ErrInvalidURI{Msg: fmt.Sprintf("parameter '%v' is unknown", k)}
+		}
+	}
 
 	max_conn := DefaultMaxConn
 	if params.Has(ConfigKeyMaxConn) {
 		max_conn, err = strconv.Atoi(params.Get(ConfigKeyMaxConn))
 		if err != nil {
-			return nil, err
+			return nil, ErrInvalidURI{Msg: "max_connections value is incorrect"}
 		}
 	}
 
@@ -278,18 +290,17 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 	max_conn_life_time, _ := time.ParseDuration(DefaultMaxConnLifetime)
 	if params.Has(ConfigKeyMaxConnLifetime) {
 		value := params.Get(ConfigKeyMaxConnLifetime)
-		max_conn_idle_time, err = time.ParseDuration(value)
+		max_conn_life_time, err = time.ParseDuration(value)
 		if err != nil {
-			return nil, ErrInvalidURI{Msg: "max_conn_life_time value is incorrect"}
+			return nil, ErrInvalidURI{Msg: "max_connection_life_time value is incorrect"}
 		}
 	}
 
 	// We construct a new uri that only contains parameters supported by the HANA driver.
 	// Otherwise, driver.NewDSNConnector returns an error.
 	newParams := url.Values{}
-	arrParamNames := [6]string{driver.DSNLocale, driver.DSNFetchSize, driver.DSNTimeout, driver.DSNTLSInsecureSkipVerify, driver.DSNTLSRootCAFile, driver.DSNTLSServerName}
-	for i := 0; i < len(arrParamNames); i++ {
-		pname := arrParamNames[i]
+	for i := 3; i < len(supportedParams); i++ {
+		pname := supportedParams[i]
 		if params.Has(pname) {
 			newParams.Add(pname, params.Get(pname))
 		}
@@ -307,6 +318,17 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 	db.SetConnMaxIdleTime(max_conn_idle_time)
 	db.SetConnMaxLifetime(max_conn_life_time)
 
+	return db, nil
+}
+
+// CreateConnection creates a connection from config values
+func CreateConnection(config dict.Dicter) (*sql.DB, error) {
+	uri, err := config.String(ConfigKeyURI, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	db, err := OpenDB(uri)
 	if err := db.Ping(); err != nil {
 		return nil, fmt.Errorf("Failed while establishing connection: %v", err)
 	}
@@ -322,7 +344,7 @@ func CreateConnection(config dict.Dicter) (*sql.DB, error) {
 // 	uri (string): [Required] HANA database host
 // 	srid (int): [Optional] The default SRID for the provider. Defaults to WebMercator (3857) but also supports WGS84 (4326)
 // 	max_connections : [Optional] The max connections to maintain in the connection pool. Default is 100. 0 means no max.
-// 	layers (map[string]struct{})  � This is map of layers keyed by the layer name. supports the following properties
+// 	layers (map[string]struct{})  — This is map of layers keyed by the layer name. supports the following properties
 //
 // 		name (string): [Required] the name of the layer. This is used to reference this layer from map layers.
 // 		tablename (string): [*Required] the name of the database table to query against. Required if sql is not defined.
@@ -351,7 +373,7 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 		return nil, fmt.Errorf("MVT provider is only available in HANA Cloud")
 	}
 
-	srid := DefaultSRID
+	srid := -1
 	if srid, err = config.Int(ConfigKeySRID, &srid); err != nil {
 		return nil, err
 	}
@@ -398,12 +420,12 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 		}
 
 		idfld := ""
-		idfld, err = layer.String(ConfigKeyGeomIDField, &idfld)
+		idfld, err = layer.String(ConfigKeyFeatureIDField, &idfld)
 		if err != nil {
 			return nil, fmt.Errorf("for layer (%v) %v : %w", i, lName, err)
 		}
 		if idfld == geomfld {
-			return nil, fmt.Errorf("for layer (%v) %v: %v (%v) and %v field (%v) is the same", i, lName, ConfigKeyGeomField, geomfld, ConfigKeyGeomIDField, idfld)
+			return nil, fmt.Errorf("for layer (%v) %v: %v (%v) and %v field (%v) is the same", i, lName, ConfigKeyGeomField, geomfld, ConfigKeyFeatureIDField, idfld)
 		}
 
 		geomType := ""
@@ -433,6 +455,20 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 			return nil, err
 		}
 
+		if lsrid < 0 {
+			// we try to auto detect SRID if it is not specified neither
+			// for the provider nor for the layer.
+			sqlQuery := sql
+			if sqlQuery == "" {
+				sqlQuery = fmt.Sprintf(`(SELECT * FROM %v)`, quoteIdentifier(tblName))
+			}
+
+			lsrid, err = getGeometryColumnSRID(p.pool, sqlQuery, geomfld)
+			if err != nil {
+				return nil, err
+			}
+		}
+
 		l := Layer{
 			name:      lName,
 			idField:   idfld,
@@ -456,7 +492,10 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 			}
 			if !strings.Contains(sql, "*") {
 				if !strings.Contains(sql, geomfld) {
-					return nil, fmt.Errorf("SQL for layer (%v) %v does not contain the geometry field: %v", i, lName, geomfld)
+					return nil, ErrGeomFieldNotFound{
+						GeomFieldName: geomfld,
+						LayerName:     lName,
+					}
 				}
 				if !strings.Contains(sql, idfld) {
 					return nil, fmt.Errorf("SQL for layer (%v) %v does not contain the id field for the geometry: %v", i, lName, sql)
@@ -486,6 +525,17 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 			return nil, err
 		}
 
+		// set the layer geom type
+		if geomType != "" {
+			if err = p.setLayerGeomType(&l, geomType); err != nil {
+				return nil, fmt.Errorf("error fetching geometry type for layer (%v): %w", l.name, err)
+			}
+		} else {
+			if err = p.inspectLayerGeomType(&l); err != nil {
+				return nil, fmt.Errorf("error fetching geometry type for layer (%v): %w", l.name, err)
+			}
+		}
+
 		if isMVT(providerType) {
 			var buffer uint = 256
 			if buffer, err = layer.Uint(ConfigKeyBuffer, &buffer); err != nil {
@@ -505,17 +555,6 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 
 		if debugLayerSQL {
 			log.Debugf("SQL for Layer(%v):\n%v\n", lName, l.sql)
-		}
-
-		// set the layer geom type
-		if geomType != "" {
-			if err = p.setLayerGeomType(&l, geomType); err != nil {
-				return nil, fmt.Errorf("error fetching geometry type for layer (%v): %w", l.name, err)
-			}
-		} else {
-			if err = p.inspectLayerGeomType(&l); err != nil {
-				return nil, fmt.Errorf("error fetching geometry type for layer (%v): %w", l.name, err)
-			}
 		}
 
 		lyrs[lName] = l
@@ -565,21 +604,22 @@ func (p Provider) inspectLayerGeomType(l *Layer) error {
 	sqlQuery = fmt.Sprintf("%v LIMIT 1", sqlQuery)
 
 	// if a !ZOOM! token exists, all features could be filtered out so we don't have a geometry to inspect it's type.
-	// address this by replacing the !ZOOM! token with an ANY statement which includes all zooms
-	sqlQuery = strings.Replace(sqlQuery, "!ZOOM!", "ANY('{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24}')", 1)
+	// address this by replacing the !ZOOM! token with an range of all values which includes all zooms,
+	// in this case the query must use the following condition "scalerank IN (!ZOOM!)"
+	sqlQuery = strings.Replace(sqlQuery, "!ZOOM!", "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24", 1)
 
 	// we need a tile to run our sql through the replacer
 	tile := provider.NewTile(0, 0, 0, 64, tegola.WebMercator)
 
 	withBBox := strings.Contains(l.sql, bboxToken)
 	// normal replacer
-	sqlQuery, err = replaceTokens(p.dbVersion, sqlQuery, l, tile, true)
+	sqlQuery, err = replaceTokens(p.dbVersion, sqlQuery, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, true)
 	if err != nil {
 		return err
 	}
 
-	extent, _ := tile.Extent()
-	rows, err := getLayerRows(p.pool, l, sqlQuery, extent, withBBox)
+	extent, _ := getTileExtent(tile, false)
+	rows, err := getLayerRows(p.pool, sqlQuery, extent, l.SRID(), withBBox)
 	if err != nil {
 		return err
 	}
@@ -591,7 +631,7 @@ func (p Provider) inspectLayerGeomType(l *Layer) error {
 		return err
 	}
 
-	fields, err := getFieldDescriptions(l.Name(), l.GeomFieldName(), l.IDFieldName(), columns)
+	fields, err := getFieldDescriptions(l.Name(), l.GeomFieldName(), l.IDFieldName(), columns, false)
 	rowValues := make([]interface{}, len(fields))
 
 	for rows.Next() {
@@ -656,7 +696,7 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 		return ErrLayerNotFound{layer}
 	}
 
-	sqlQuery, err := replaceTokens(p.dbVersion, plyr.sql, &plyr, tile, true)
+	sqlQuery, err := replaceTokens(p.dbVersion, plyr.sql, plyr.IDFieldName(), plyr.GeomFieldName(), plyr.GeomType(), tile, true)
 	if err != nil {
 		return fmt.Errorf("error replacing layer tokens for layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 	}
@@ -667,7 +707,7 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 
 	now := time.Now()
 
-	extent, _ := tile.BufferedExtent()
+	extent, _ := getTileExtent(tile, true)
 	srid := plyr.SRID()
 	rows, err := p.pool.QueryContextWithBBox(ctx, sqlQuery, extent, srid, false)
 
@@ -785,14 +825,14 @@ func (p Provider) MVTForLayers(ctx context.Context, tile provider.Tile, layers [
 		if debugLayerSQL {
 			log.Debugf("SQL for Layer(%v):\n%v\n", l.Name(), l.sql)
 		}
-		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, &l, tile, false)
+		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, false)
 		if err := ctxErr(ctx, err); err != nil {
 			return nil, err
 		}
 
 		now := time.Now()
 
-		extent, _ := tile.Extent()
+		extent, _ := getTileExtent(tile, false)
 		srid := l.SRID()
 		rows, err := p.pool.QueryContextWithBBox(ctx, sqlQuery, extent, srid, true)
 

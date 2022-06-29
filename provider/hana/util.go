@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -86,10 +88,10 @@ func getLayerSQL(tblname string) string {
 	return fmt.Sprintf(`SELECT * FROM %[1]v LIMIT 0;`, quotedTblName)
 }
 
-func getLayerRows(pool *connectionPoolCollector, l *Layer, sql string, extent *geom.Extent, withBBox bool) (*sql.Rows, error) {
+func getLayerRows(pool *connectionPoolCollector, sql string, extent *geom.Extent, srid uint64, withBBox bool) (*sql.Rows, error) {
 	ctx := context.Background()
 	if withBBox {
-		rows, err := pool.QueryContextWithBBox(ctx, sql, extent, l.SRID(), false)
+		rows, err := pool.QueryContextWithBBox(ctx, sql, extent, srid, false)
 		if err := ctxErr(ctx, err); err != nil {
 			return nil, err
 		}
@@ -110,13 +112,13 @@ func getLayerFields(pool *connectionPoolCollector, l *Layer, sql string) ([]Fiel
 	//	'tablename' param. because of this case normal SQL token replacement needs to be
 	//	applied to tablename SQL generation
 	tile := provider.NewTile(18, 0, 0, 64, tegola.WebMercator)
-	sql, err := replaceTokens(2, sql, l, tile, false)
+	sql, err := replaceTokens(2, sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, false)
 	if err != nil {
 		return nil, err
 	}
 
-	extent, _ := tile.Extent()
-	rows, err := getLayerRows(pool, l, sql, extent, withBBox)
+	extent, _ := getTileExtent(tile, false)
+	rows, err := getLayerRows(pool, sql, extent, l.SRID(), withBBox)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +128,7 @@ func getLayerFields(pool *connectionPoolCollector, l *Layer, sql string) ([]Fiel
 		return nil, err
 	}
 
-	return getFieldDescriptions(l.Name(), l.GeomFieldName(), l.IDFieldName(), columns)
+	return getFieldDescriptions(l.Name(), l.GeomFieldName(), l.IDFieldName(), columns, true)
 }
 
 func getFieldNames(fields []FieldDescription) []string {
@@ -162,16 +164,12 @@ func genSQL(l *Layer, tblName string, fieldNames []string, buffer bool, provider
 		fieldNames[i] = quoteIdentifier(fieldNames[i])
 	}
 
-	// to avoid field names possibly colliding with Postgres keywords,
-	// we wrap the field names in quotes
-
 	if fgeom == -1 {
 		fieldNames = append(fieldNames, genGeomField(l.geomField, providerType))
 	} else {
 		fieldNames[fgeom] = genGeomField(l.geomField, providerType)
 	}
 
-	// add required id field
 	if fid == -1 && l.idField != "" {
 		fieldNames = append(fieldNames, quoteIdentifier(l.idField))
 	}
@@ -222,12 +220,33 @@ func getBBoxCoordinates(extent *geom.Extent, srid uint64) (geom.Point, geom.Poin
 	return minGeo.(geom.Point), maxGeo.(geom.Point), nil
 }
 
-func getBBoxFilter(dbVersion uint, geomField string, srid uint64) string {
+func getBBoxFilter(dbVersion uint, geomField string) string {
 	if dbVersion == 1 {
-		return fmt.Sprintf("%v.ST_Transform($3).ST_IntersectsRect(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		return fmt.Sprintf("%v.ST_IntersectsRect(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
 	} else {
-		return fmt.Sprintf("%v.ST_Transform($3).ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		return fmt.Sprintf("%v.ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
 	}
+}
+
+func getGeometryColumnSRID(pool *connectionPoolCollector, sql string, geomField string) (srid int, err error) {
+	sqlQuery := fmt.Sprintf("SELECT %[1]v.ST_SRID() FROM %[2]v WHERE %[1]v IS NOT NULL LIMIT 1", quoteIdentifier(geomField), sql)
+	err = pool.QueryRow(sqlQuery).Scan(&srid)
+	return srid, err
+}
+
+func getTileExtent(tile provider.Tile, withBuffer bool) (*geom.Extent, uint64) {
+	if withBuffer {
+		extent, srid := tile.BufferedExtent()
+
+		minx := math.Max(-20037508.3427892, extent[0])
+		miny := math.Max(-20037508.3427892, extent[1])
+		maxx := math.Min(20037508.3427892, extent[2])
+		maxy := math.Min(20037508.3427892, extent[3])
+
+		return geom.NewExtent([2]float64{minx, miny}, [2]float64{maxx, maxy}), srid
+	}
+
+	return tile.Extent()
 }
 
 // replaceTokens replaces tokens in the provided SQL string
@@ -241,36 +260,31 @@ func getBBoxFilter(dbVersion uint, geomField string, srid uint64) string {
 // !PIXEL_HEIGHT! - the pixel height in meters, assuming 256x256 tiles
 // !GEOM_FIELD! - the geom field name
 // !GEOM_TYPE! - the geom field type if defined otherwise ""
-func replaceTokens(dbVersion uint, sql string, lyr *Layer, tile provider.Tile, withBuffer bool) (string, error) {
+func replaceTokens(dbVersion uint, sql string, idFieldName string, geomFieldName string, geomFieldType geom.Geometry, tile provider.Tile, withBuffer bool) (string, error) {
 	var (
-		extent  *geom.Extent
 		geoType string
 	)
 
-	if lyr == nil {
-		return "", ErrNilLayer
-	}
-
-	extent, _ = tile.Extent()
+	extent, _ := getTileExtent(tile, false)
 	// TODO: Always convert to meter if we support different projections
 	pixelWidth := (extent.MaxX() - extent.MinX()) / 256
 	pixelHeight := (extent.MaxY() - extent.MinY()) / 256
 	scaleDenominator := pixelWidth / 0.00028 /* px size in m */
 
-	if lyr.GeomType() != nil {
-		geoType = fmt.Sprintf("%v", lyr.GeomType())
+	if geomFieldType != nil {
+		geoType = fmt.Sprintf("%v", geomFieldType)
 	}
 
 	// replace query string tokens
 	z, x, y := tile.ZXY()
 	tokenReplacer := strings.NewReplacer(
-		bboxToken, getBBoxFilter(dbVersion, lyr.geomField, lyr.SRID()),
+		bboxToken, getBBoxFilter(dbVersion, geomFieldName),
 		zoomToken, strconv.FormatUint(uint64(z), 10),
 		zToken, strconv.FormatUint(uint64(z), 10),
 		xToken, strconv.FormatUint(uint64(x), 10),
 		yToken, strconv.FormatUint(uint64(y), 10),
-		idFieldToken, lyr.IDFieldName(),
-		geomFieldToken, lyr.GeomFieldName(),
+		idFieldToken, idFieldName,
+		geomFieldToken, geomFieldName,
 		geomTypeToken, geoType,
 		scaleDenominatorToken, strconv.FormatFloat(scaleDenominator, 'f', -1, 64),
 		pixelWidthToken, strconv.FormatFloat(pixelWidth, 'f', -1, 64),
@@ -282,7 +296,7 @@ func replaceTokens(dbVersion uint, sql string, lyr *Layer, tile provider.Tile, w
 	return tokenReplacer.Replace(uppercaseTokenSQL), nil
 }
 
-func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns []*sql.ColumnType) ([]FieldDescription, error) {
+func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns []*sql.ColumnType, checkFieldType bool) ([]FieldDescription, error) {
 	list := make([]FieldDescription, 0, len(columns))
 
 	var geomFieldFound bool
@@ -311,8 +325,13 @@ func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns 
 		case "BIGINT":
 			dataType = DtBigint
 			break
-		case "DECIMAL":
-			dataType = DtDecimal
+		case "DECIMAL", "FIXED8", "FIXED12", "FIXED16":
+			precision, _, _ := column.DecimalSize()
+			if precision <= 16 {
+				dataType = DtSmalldecimal
+			} else {
+				dataType = DtDecimal
+			}
 			break
 		case "SMALLDECIMAL":
 			dataType = DtSmalldecimal
@@ -382,11 +401,15 @@ func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns 
 		}
 
 		if !geomFieldFound && fieldName == geomFieldname {
-			geomFieldFound = true
-			isGeometryField = true
+			if !checkFieldType || (dataType == DtSTGeometry || dataType == DtSTPoint || dataType == DtBlob) {
+				geomFieldFound = true
+				isGeometryField = true
+			}
 		} else if !idFieldFound && fieldName == idFieldname {
-			idFieldFound = true
-			isIdField = true
+			if !checkFieldType || (dataType == DtTinyint || dataType == DtSmallint || dataType == DtInteger || dataType == DtBigint) {
+				idFieldFound = true
+				isIdField = true
+			}
 		}
 
 		list = append(list, FieldDescription{
@@ -396,7 +419,7 @@ func getFieldDescriptions(layerName, geomFieldname, idFieldname string, columns 
 			isGeometry:  isGeometryField})
 	}
 
-	if !geomFieldFound {
+	if !geomFieldFound && geomFieldname != "" {
 		return nil, ErrGeomFieldNotFound{
 			GeomFieldName: geomFieldname,
 			LayerName:     layerName,
@@ -439,7 +462,10 @@ func setupRowValues(descriptions []FieldDescription, rowValues []interface{}) {
 		case DtBlob, DtClob, DtNClob, DtText:
 			rowValues[i] = &driver.NullLob{Lob: new(driver.Lob).SetWriter(new(bytes.Buffer))}
 			break
-		case DtChar, DtNChar, DtNVarchar, DtVarchar, DtShorttext, DtAlphanum, DtSTGeometry, DtSTPoint:
+		case DtChar, DtNChar, DtNVarchar, DtVarchar, DtShorttext, DtAlphanum:
+			rowValues[i] = new(sql.NullString)
+			break
+		case DtSTGeometry, DtSTPoint:
 			rowValues[i] = new(sql.NullString)
 			break
 		default:
@@ -517,7 +543,11 @@ func readRowValues(ctx context.Context, descriptions []FieldDescription, rowValu
 		case DtReal, DtDouble:
 			float64Value := *(rowValues[i].(*sql.NullFloat64))
 			if float64Value.Valid {
-				tags[fieldName] = float64Value.Float64
+				if desc.dataType == DtReal {
+					tags[fieldName] = float32(float64Value.Float64)
+				} else {
+					tags[fieldName] = float64Value.Float64
+				}
 			}
 			break
 		case DtDate, DtTime, DtTimestamp, DtSeconddate:
@@ -530,7 +560,10 @@ func readRowValues(ctx context.Context, descriptions []FieldDescription, rowValu
 				case DtTime:
 					tags[fieldName] = timeValue.Time.Format("15:04:05")
 					break
-				case DtTimestamp, DtSeconddate:
+				case DtTimestamp:
+					tags[fieldName] = timeValue.Time.Format("2006-01-02T15:04:05.000")
+					break
+				case DtSeconddate:
 					tags[fieldName] = timeValue.Time.Format("2006-01-02T15:04:05")
 					break
 				}
@@ -554,7 +587,7 @@ func readRowValues(ctx context.Context, descriptions []FieldDescription, rowValu
 		case DtBinary, DtVarbinary:
 			binValue := *(rowValues[i].(*driver.NullBytes))
 			if binValue.Valid {
-				tags[fieldName] = string(binValue.Bytes[:])
+				tags[fieldName] = hex.EncodeToString(binValue.Bytes[:])
 			}
 			break
 		case DtBlob, DtClob, DtNClob, DtText:
@@ -563,14 +596,16 @@ func readRowValues(ctx context.Context, descriptions []FieldDescription, rowValu
 				writer := lobValue.Lob.Writer()
 				data := writer.(*bytes.Buffer).Bytes()
 				dataLen := writer.(*bytes.Buffer).Len()
-				if desc.isGeometry {
-					geom = make([]byte, dataLen)
-					copy(geom, data)
-				} else {
-					blob := make([]byte, dataLen)
-					copy(blob, data)
-					if blob != nil {
-						tags[fieldName] = string(blob[:])
+				if dataLen > 0 {
+					if desc.isGeometry {
+						geom = make([]byte, dataLen)
+						copy(geom, data)
+					} else {
+						if desc.dataType == DtBlob {
+							tags[fieldName] = hex.EncodeToString(data[0:dataLen])
+						} else {
+							tags[fieldName] = string(data[0:dataLen])
+						}
 					}
 				}
 			}
@@ -578,7 +613,14 @@ func readRowValues(ctx context.Context, descriptions []FieldDescription, rowValu
 		case DtSTGeometry, DtSTPoint:
 			strValue := *(rowValues[i].(*sql.NullString))
 			if strValue.Valid {
-				tags[fieldName] = strValue.String
+				if desc.isGeometry {
+					geom, err = hex.DecodeString(strValue.String)
+					if err != nil {
+						return 0, nil, nil, fmt.Errorf("unable to decode geometry binary string in field '%v'", fieldName)
+					}
+				} else {
+					tags[fieldName] = strValue.String
+				}
 			}
 			break
 		default:
