@@ -492,7 +492,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeyTablename: "ne_10m_land_scale_rank",
+					ConfigKeyTablename: `"TEGOLACI"."ne_10m_land_scale_rank"`,
 				}},
 			},
 			tile:                 provider.NewTile(1, 1, 1, 64, tegola.WebMercator),
@@ -503,7 +503,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeyTablename: "ne_10m_land_scale_rank",
+					ConfigKeyTablename: `"TEGOLACI"."ne_10m_land_scale_rank"`,
 					ConfigKeySRID:      4326,
 					ConfigKeyFields:    []string{"scalerank"},
 				}},
@@ -516,7 +516,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName:      "land",
-					ConfigKeyTablename:      "ne_10m_land_scale_rank",
+					ConfigKeyTablename:      `"TEGOLACI"."ne_10m_land_scale_rank"`,
 					ConfigKeyFeatureIDField: "id",
 					ConfigKeyFields:         []string{"id", "scalerank"},
 				}},
@@ -529,7 +529,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(SELECT "id", "geom", "featurecla" FROM "ne_10m_land_scale_rank" ORDER BY "id" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `(SELECT "id", "geom", "featurecla" FROM "TEGOLACI"."ne_10m_land_scale_rank" ORDER BY "id" LIMIT 100) AS sub`,
 				}},
 			},
 			tile:                 provider.NewTile(1, 1, 1, 64, tegola.WebMercator),
@@ -541,7 +541,7 @@ func TestTileFeatures(t *testing.T) {
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
 					ConfigKeySQL: ` (
-														SELECT "id", "geom", "featurecla" FROM "ne_10m_land_scale_rank" LIMIT 100
+														SELECT "id", "geom", "featurecla" FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100
 													) AS sub`,
 				}},
 			},
@@ -553,7 +553,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(SELECT "id", "geom", "featurecla" FROM "ne_10m_land_scale_rank" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `(SELECT "id", "geom", "featurecla" FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100) AS sub`,
 					ConfigKeyTablename: "not_good_name",
 				}},
 			},
@@ -565,7 +565,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(  SELECT "id", "geom", "featurecla" FROM "ne_10m_land_scale_rank" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `(  SELECT "id", "geom", "featurecla" FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100) AS sub`,
 				}},
 			},
 			tile:                 provider.NewTile(1, 1, 1, 64, tegola.WebMercator),
@@ -576,7 +576,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `   (SELECT "id", "geom", "featurecla" FROM "ne_10m_land_scale_rank" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `   (SELECT "id", "geom", "featurecla" FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100) AS sub`,
 				}},
 			},
 			tile:                 provider.NewTile(1, 1, 1, 64, tegola.WebMercator),
@@ -587,7 +587,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(SELECT * FROM "ne_10m_land_scale_rank" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `(SELECT * FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100) AS sub`,
 				}},
 			},
 			tile:                 provider.NewTile(1, 1, 1, 64, tegola.WebMercator),
@@ -598,7 +598,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(SELECT * FROM "ne_10m_land_scale_rank" LIMIT 100) AS sub`,
+					ConfigKeySQL:       `(SELECT * FROM "TEGOLACI"."ne_10m_land_scale_rank" LIMIT 100) AS sub`,
 					ConfigKeyFields:    []string{"scalerank"},
 				}},
 			},
@@ -610,7 +610,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `SELECT "id", "geom".ST_AsBinary() AS "geom" FROM "ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!`,
+					ConfigKeySQL:       `SELECT "id", "geom".ST_AsBinary() AS "geom" FROM "TEGOLACI"."ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!`,
 					ConfigKeySRID:      4326,
 				}},
 			},
@@ -622,7 +622,7 @@ func TestTileFeatures(t *testing.T) {
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
 					ConfigKeyGeomType:  "polygon", // required to disable SQL inspection
-					ConfigKeySQL:       `(SELECT "id", "geom", !ZOOM! * 2 AS "doublezoom" FROM "ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!) AS sub`,
+					ConfigKeySQL:       `(SELECT "id", "geom", !ZOOM! * 2 AS "doublezoom" FROM "TEGOLACI"."ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!) AS sub`,
 					ConfigKeySRID:      4326,
 				}},
 			},
@@ -634,7 +634,7 @@ func TestTileFeatures(t *testing.T) {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "land",
-					ConfigKeySQL:       `(SELECT "id", "geom", 1 AS "a", '2' AS b, 3 AS "c" FROM "ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!) AS sub`,
+					ConfigKeySQL:       `(SELECT "id", "geom", 1 AS "a", '2' AS b, 3 AS "c" FROM "TEGOLACI"."ne_10m_land_scale_rank" WHERE "scalerank" IN (!ZOOM!) AND !BBOX!) AS sub`,
 					ConfigKeyFields:    []string{"id", "a", "B"},
 					ConfigKeySRID:      4326, // required to avoid a failure in auto detection of the SRID
 				}},
@@ -648,7 +648,7 @@ func TestTileFeatures(t *testing.T) {
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "missing_geom_field_name",
 					ConfigKeyGeomField: "geom",
-					ConfigKeySQL:       `SELECT "id", "scalerank", 1 AS "geom" FROM "ne_10m_land_scale_rank" WHERE !BBOX!`,
+					ConfigKeySQL:       `SELECT "id", "scalerank", 1 AS "geom" FROM "TEGOLACI"."ne_10m_land_scale_rank" WHERE !BBOX!`,
 					ConfigKeySRID:      4326, // required to avoid a failure in auto detection of the SRID
 				}},
 			},
@@ -663,7 +663,7 @@ func TestTileFeatures(t *testing.T) {
 				LayerConfig: []map[string]interface{}{{
 					ConfigKeyLayerName: "missing_geom_field_name",
 					ConfigKeyGeomField: "geom",
-					ConfigKeySQL:       `SELECT "id", "scalerank" FROM "ne_10m_land_scale_rank" WHERE !BBOX!`,
+					ConfigKeySQL:       `SELECT "id", "scalerank" FROM "TEGOLACI"."ne_10m_land_scale_rank" WHERE !BBOX!`,
 					ConfigKeySRID:      4326, // required to avoid a failure in auto detection of the SRID
 				}},
 			},
@@ -721,7 +721,7 @@ func TestMVTForLayers(t *testing.T) {
 				return
 			}
 			if len(tc.mvtTile) != len(mvtTile) {
-				t.Errorf("tile byte length, exected %v got %v", len(tc.mvtTile), len(mvtTile))
+				t.Errorf("tile byte length, expected %v got %v", len(tc.mvtTile), len(mvtTile))
 			}
 		}
 	}
@@ -733,19 +733,18 @@ func TestMVTForLayers(t *testing.T) {
 						ConfigKeyFeatureIDField: "id",
 						ConfigKeyGeomType:       "multipolygon",
 						ConfigKeyGeomField:      "geom",
-						ConfigKeyLayerName:      "land",
-						ConfigKeySQL:            `SELECT "geom", "id", "scalerank" FROM "QGIS_DEMO"."ne_10m_land_scale_rank_3857" WHERE !BBOX!`,
+						ConfigKeyLayerName:      "rivers",
+						ConfigKeySQL:            `SELECT * FROM (SELECT "id", "featurecla", "geom".ST_Transform(3857) AS "geom" FROM "TEGOLACI"."ne_50m_rivers_lake_centerlines") AS sub WHERE !BBOX!`,
 						ConfigKeySRID:           3857,
 					},
 				},
 			},
-			layerNames: []string{"land"},
-			mvtTile:    make([]byte, 6361),
+			layerNames: []string{"rivers"},
+			mvtTile:    make([]byte, 7619),
 			tile:       provider.NewTile(2, 1, 1, 16, 4326),
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, fn(tc))
 	}
-
 }

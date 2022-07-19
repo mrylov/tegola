@@ -825,6 +825,7 @@ func (p Provider) MVTForLayers(ctx context.Context, tile provider.Tile, layers [
 		if debugLayerSQL {
 			log.Debugf("SQL for Layer(%v):\n%v\n", l.Name(), l.sql)
 		}
+
 		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, false)
 		if err := ctxErr(ctx, err); err != nil {
 			return nil, err
