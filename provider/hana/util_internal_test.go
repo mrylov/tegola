@@ -18,7 +18,7 @@ func TestReplaceTokens(t *testing.T) {
 
 	fn := func(tc tcase) func(t *testing.T) {
 		return func(t *testing.T) {
-			sql, err := replaceTokens(tc.dbVersion, tc.sql, tc.layer.IDFieldName(), tc.layer.GeomFieldName(), tc.layer.GeomType(), tc.tile, true)
+			sql, err := replaceTokens(tc.dbVersion, tc.sql, tc.layer.IDFieldName(), tc.layer.GeomFieldName(), tc.layer.GeomType(), tc.layer.SRID(), tc.tile, true)
 			if err != nil {
 				t.Errorf("unexpected error, Expected nil Got %v", err)
 				return
@@ -45,6 +45,13 @@ func TestReplaceTokens(t *testing.T) {
 			layer:     Layer{srid: tegola.WebMercator, geomField: "geom"},
 			tile:      provider.NewTile(2, 1, 1, 64, tegola.WebMercator),
 			expected:  `SELECT * FROM foo WHERE "geom".ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1`,
+		},
+		"replace BBOX for round-earth with planar equivalent": {
+			dbVersion: 4,
+			sql:       "SELECT * FROM foo WHERE !BBOX!",
+			layer:     Layer{srid: 1000004326, geomField: "geom"},
+			tile:      provider.NewTile(2, 1, 1, 64, tegola.WebMercator),
+			expected:  `SELECT * FROM foo WHERE "geom".ST_SRID($3).ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1`,
 		},
 		"replace BBOX with != in query": {
 			dbVersion: 4,

@@ -75,6 +75,24 @@ func quoteTableName(name string) string {
 	return ret
 }
 
+func hasSrsPlanarEquivalent(pool *connectionPoolCollector, srid uint64) bool {
+	var numSRIDs int = 0
+	sql := "SELECT COUNT(*) FROM SYS.ST_SPATIAL_REFERENCE_SYSTEMS WHERE SRS_ID = ?"
+	_ = pool.QueryRow(sql, toPlanarEquivalenSrid(srid)).Scan(&numSRIDs)
+	return numSRIDs > 0
+}
+
+func isSrsRoundEarth(pool *connectionPoolCollector, srid uint64) bool {
+	if srid == tegola.WGS84 {
+		return true
+	}
+
+	sql := "SELECT TO_BOOLEAN(ROUND_EARTH) FROM SYS.ST_SPATIAL_REFERENCE_SYSTEMS WHERE SRS_ID = $1"
+	var ret bool = false
+	_ = pool.QueryRow(sql, srid).Scan(&ret)
+	return ret
+}
+
 func genGeomField(name string, providerType string) string {
 	if isMVT(providerType) {
 		return quoteIdentifier(name)
@@ -112,7 +130,7 @@ func getLayerFields(pool *connectionPoolCollector, l *Layer, sql string) ([]Fiel
 	//	'tablename' param. because of this case normal SQL token replacement needs to be
 	//	applied to tablename SQL generation
 	tile := provider.NewTile(18, 0, 0, 64, tegola.WebMercator)
-	sql, err := replaceTokens(2, sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, false)
+	sql, err := replaceTokens(2, sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), l.SRID(), tile, false)
 	if err != nil {
 		return nil, err
 	}
@@ -205,14 +223,34 @@ func genMVTSQL(l *Layer, fields []string, buffer uint, clipGeometry bool) (sql s
 	return sql, nil
 }
 
+const (
+	PLANAR_SRID_OFFSET = 1000000000
+)
+
+func isPlanarEquivalentSrid(srid uint64) bool {
+	return srid >= PLANAR_SRID_OFFSET
+}
+
+func toPlanarEquivalenSrid(srid uint64) uint64 {
+	return PLANAR_SRID_OFFSET + srid
+}
+
+func fromWebMercator(srid uint64, geometry geom.Geometry) (geom.Geometry, error) {
+	if isPlanarEquivalentSrid(srid) {
+		return basic.FromWebMercator(srid-PLANAR_SRID_OFFSET, geometry)
+	}
+
+	return basic.FromWebMercator(srid, geometry)
+}
+
 func getBBoxCoordinates(extent *geom.Extent, srid uint64) (geom.Point, geom.Point, error) {
 	// TODO: it's currently assumed the tile will always be in WebMercator. Need to support different projections
-	minGeo, err := basic.FromWebMercator(srid, geom.Point{extent.MinX(), extent.MinY()})
+	minGeo, err := fromWebMercator(srid, geom.Point{extent.MinX(), extent.MinY()})
 	if err != nil {
 		return geom.Point{}, geom.Point{}, fmt.Errorf("Error trying to convert tile point: %w ", err)
 	}
 
-	maxGeo, err := basic.FromWebMercator(srid, geom.Point{extent.MaxX(), extent.MaxY()})
+	maxGeo, err := fromWebMercator(srid, geom.Point{extent.MaxX(), extent.MaxY()})
 	if err != nil {
 		return geom.Point{}, geom.Point{}, fmt.Errorf("Error trying to convert tile point: %w ", err)
 	}
@@ -220,16 +258,27 @@ func getBBoxCoordinates(extent *geom.Extent, srid uint64) (geom.Point, geom.Poin
 	return minGeo.(geom.Point), maxGeo.(geom.Point), nil
 }
 
-func getBBoxFilter(dbVersion uint, geomField string) string {
+func getBBoxFilter(dbVersion uint, geomField string, srid uint64) string {
 	if dbVersion == 1 {
-		return fmt.Sprintf("%v.ST_IntersectsRect(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		if isPlanarEquivalentSrid(srid) {
+			return fmt.Sprintf("%v.ST_SRID($3).ST_IntersectsRect(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		} else {
+			return fmt.Sprintf("%v.ST_IntersectsRect(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		}
 	} else {
-		return fmt.Sprintf("%v.ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		if isPlanarEquivalentSrid(srid) {
+			return fmt.Sprintf("%v.ST_SRID($3).ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		} else {
+			return fmt.Sprintf("%v.ST_IntersectsRectPlanar(NEW ST_POINT($1, $3), NEW ST_POINT($2, $3)) = 1", quoteIdentifier(geomField))
+		}
 	}
 }
 
-func getGeometryColumnSRID(pool *connectionPoolCollector, sql string, geomField string) (srid int, err error) {
-	sqlQuery := fmt.Sprintf("SELECT %[1]v.ST_SRID() FROM %[2]v WHERE %[1]v IS NOT NULL LIMIT 1", quoteIdentifier(geomField), sql)
+func getGeometryColumnSRID(pool *connectionPoolCollector, dbVersion uint, sql string, geomFieldName string) (srid int, err error) {
+	sqlQuery := strings.Replace(strings.Replace(sql, "!BOX!", bboxToken, -1), "!bbox!", bboxToken, -1)
+	sqlQuery = strings.Replace(sqlQuery, bboxToken, "1=1", -1)
+
+	sqlQuery = fmt.Sprintf("SELECT %[1]v.ST_SRID() FROM %[2]v WHERE %[1]v IS NOT NULL LIMIT 1", quoteIdentifier(geomFieldName), sqlQuery)
 	err = pool.QueryRow(sqlQuery).Scan(&srid)
 	return srid, err
 }
@@ -260,7 +309,7 @@ func getTileExtent(tile provider.Tile, withBuffer bool) (*geom.Extent, uint64) {
 // !PIXEL_HEIGHT! - the pixel height in meters, assuming 256x256 tiles
 // !GEOM_FIELD! - the geom field name
 // !GEOM_TYPE! - the geom field type if defined otherwise ""
-func replaceTokens(dbVersion uint, sql string, idFieldName string, geomFieldName string, geomFieldType geom.Geometry, tile provider.Tile, withBuffer bool) (string, error) {
+func replaceTokens(dbVersion uint, sql string, idFieldName string, geomFieldName string, geomFieldType geom.Geometry, srid uint64, tile provider.Tile, withBuffer bool) (string, error) {
 	var (
 		geoType string
 	)
@@ -278,7 +327,7 @@ func replaceTokens(dbVersion uint, sql string, idFieldName string, geomFieldName
 	// replace query string tokens
 	z, x, y := tile.ZXY()
 	tokenReplacer := strings.NewReplacer(
-		bboxToken, getBBoxFilter(dbVersion, geomFieldName),
+		bboxToken, getBBoxFilter(dbVersion, geomFieldName, srid),
 		zoomToken, strconv.FormatUint(uint64(z), 10),
 		zToken, strconv.FormatUint(uint64(z), 10),
 		xToken, strconv.FormatUint(uint64(x), 10),

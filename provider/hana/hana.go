@@ -36,8 +36,8 @@ func (c connectionPoolCollector) Close() {
 	c.pool.Close()
 }
 
-func (c connectionPoolCollector) QueryRow(query string) *sql.Row {
-	return c.pool.QueryRow(query)
+func (c connectionPoolCollector) QueryRow(query string, args ...any) *sql.Row {
+	return c.pool.QueryRow(query, args...)
 }
 
 func (c connectionPoolCollector) QueryContext(ctx context.Context, query string) (*sql.Rows, error) {
@@ -463,10 +463,17 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 				sqlQuery = fmt.Sprintf(`(SELECT * FROM %v)`, quoteIdentifier(tblName))
 			}
 
-			lsrid, err = getGeometryColumnSRID(p.pool, sqlQuery, geomfld)
+			lsrid, err = getGeometryColumnSRID(p.pool, p.dbVersion, sqlQuery, geomfld)
 			if err != nil {
 				return nil, err
 			}
+		}
+
+		if isSrsRoundEarth(p.pool, uint64(lsrid)) {
+			if !hasSrsPlanarEquivalent(p.pool, uint64(lsrid)) {
+				return nil, fmt.Errorf("Unable to find a planar equivalent for srid %v in layer: %v", lsrid, lName)
+			}
+			lsrid = int(toPlanarEquivalenSrid(uint64(lsrid)))
 		}
 
 		l := Layer{
@@ -485,7 +492,7 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 
 		if sql != "" {
 			// convert !BOX! (MapServer) and !bbox! (Mapnik) to !BBOX! for compatibility
-			sql := strings.Replace(strings.Replace(sql, "!BOX!", "!BBOX!", -1), "!bbox!", "!BBOX!", -1)
+			sql := strings.Replace(strings.Replace(sql, "!BOX!", bboxToken, -1), "!bbox!", bboxToken, -1)
 			// make sure that the sql has a !BBOX! token
 			if !strings.Contains(sql, bboxToken) {
 				return nil, fmt.Errorf("SQL for layer (%v) %v is missing required token: %v", i, lName, bboxToken)
@@ -613,7 +620,7 @@ func (p Provider) inspectLayerGeomType(l *Layer) error {
 
 	withBBox := strings.Contains(l.sql, bboxToken)
 	// normal replacer
-	sqlQuery, err = replaceTokens(p.dbVersion, sqlQuery, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, true)
+	sqlQuery, err = replaceTokens(p.dbVersion, sqlQuery, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), l.SRID(), tile, true)
 	if err != nil {
 		return err
 	}
@@ -696,7 +703,7 @@ func (p Provider) TileFeatures(ctx context.Context, layer string, tile provider.
 		return ErrLayerNotFound{layer}
 	}
 
-	sqlQuery, err := replaceTokens(p.dbVersion, plyr.sql, plyr.IDFieldName(), plyr.GeomFieldName(), plyr.GeomType(), tile, true)
+	sqlQuery, err := replaceTokens(p.dbVersion, plyr.sql, plyr.IDFieldName(), plyr.GeomFieldName(), plyr.GeomType(), plyr.SRID(), tile, true)
 	if err != nil {
 		return fmt.Errorf("error replacing layer tokens for layer (%v) SQL (%v): %w", layer, sqlQuery, err)
 	}
@@ -826,7 +833,7 @@ func (p Provider) MVTForLayers(ctx context.Context, tile provider.Tile, layers [
 			log.Debugf("SQL for Layer(%v):\n%v\n", l.Name(), l.sql)
 		}
 
-		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), tile, false)
+		sqlQuery, err := replaceTokens(p.dbVersion, l.sql, l.IDFieldName(), l.GeomFieldName(), l.GeomType(), l.SRID(), tile, false)
 		if err := ctxErr(ctx, err); err != nil {
 			return nil, err
 		}
