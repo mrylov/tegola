@@ -6,7 +6,6 @@ The HANA provider manages querying for tile requests against an [SAP HANA](https
 [[providers]]
 name = "test_hana"       # provider name is referenced from map layers (required)
 type = "hana"            # the type of data provider must be "hana" for this data provider (required)
-
 uri = "hdb://myuser:mypassword@something.hanacloud.ondemand.com:443?" # HANA connection string (required)
 ```
 
@@ -32,7 +31,7 @@ hdb://myuser:mypassword@something.hanacloud.ondemand.com:443?TLSInsecureSkipVeri
 - `timeout`: [Optional] Driver side connection timeout in seconds.
 - `fetchSize`: [Optional] Maximum number of fetched records from database by database/sql/driver/Rows.Next().
 - `TLSRootCAFile` [Optional] Path,- filename to root certificate(s).
-- `TLSServerName` [Optional] ServerName to verify the hostname.
+- `TLSServerName` [Optional] ServerName to verify the hostname. By setting TLSServerName=host, the provider will set TLSServerName same as 'host' value in `uri`.
 - `TLSInsecureSkipVerify` [Optional] Controls whether a client verifies the server's certificate chain and host name.
 - `max_connections`: [Optional] The max connections to maintain in the connection pool. Defaults to 100. 0 means no max.
 - `max_connection_idle_time`: [Optional] The maximum time an idle connection is kept alive. Defaults to "30m".
