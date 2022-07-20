@@ -302,7 +302,11 @@ func OpenDB(uri string) (*sql.DB, error) {
 	for i := 3; i < len(supportedParams); i++ {
 		pname := supportedParams[i]
 		if params.Has(pname) {
-			newParams.Add(pname, params.Get(pname))
+			value := params.Get(pname)
+			if pname == driver.DSNTLSServerName && value == "host" {
+				value = strings.Split(u.Host, ":")[0]
+			}
+			newParams.Add(pname, value)
 		}
 	}
 
