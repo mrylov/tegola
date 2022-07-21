@@ -5,6 +5,7 @@ go 1.17
 require (
 	github.com/Azure/azure-storage-blob-go v0.0.0-20180706173141-f0a732ea9441
 	github.com/BurntSushi/toml v0.4.1
+	github.com/SAP/go-hdb v0.106.1
 	github.com/ajstarks/svgo v0.0.0-20170507103333-2489f1e6d405
 	github.com/akrylysov/algnhsa v0.12.1
 	github.com/aws/aws-sdk-go v1.27.0
@@ -12,7 +13,7 @@ require (
 	github.com/gdey/tbltest v0.0.0-20170331191646-af8abc47b052
 	github.com/go-redis/redis v6.9.0+incompatible
 	github.com/go-spatial/cobra v0.0.3-0.20181105183926-68194e4fbcc6
-	github.com/go-spatial/geom v0.0.0-20190821234737-802ab2533ab4
+	github.com/go-spatial/geom v0.0.0-20220426070044-6e8855d2cfe6
 	github.com/go-test/deep v0.0.0-20170429201529-f49763a6ea0a
 	github.com/golang/protobuf v1.4.3
 	github.com/jackc/pgproto3/v2 v2.2.0
@@ -50,9 +51,9 @@ require (
 	github.com/spf13/pflag v1.0.1 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.6.0 // indirect
-	golang.org/x/crypto v0.0.0-20210711020723-a769d52b0f97 // indirect
+	golang.org/x/crypto v0.0.0-20220315160706-3147a52a75dd // indirect
 	golang.org/x/sys v0.0.0-20210615035016-665e8c7367d1 // indirect
-	golang.org/x/text v0.3.6 // indirect
+	golang.org/x/text v0.3.7 // indirect
 	golang.org/x/tools v0.1.5 // indirect
 	google.golang.org/protobuf v1.23.0 // indirect
 )
