@@ -8,6 +8,18 @@ github.com/Azure/azure-storage-blob-go/2017-07-29/azblob
 ## explicit; go 1.16
 github.com/BurntSushi/toml
 github.com/BurntSushi/toml/internal
+# github.com/SAP/go-hdb v0.106.1
+## explicit; go 1.18
+github.com/SAP/go-hdb/driver
+github.com/SAP/go-hdb/driver/dial
+github.com/SAP/go-hdb/driver/hdb
+github.com/SAP/go-hdb/driver/internal/container/vermap
+github.com/SAP/go-hdb/driver/internal/protocol
+github.com/SAP/go-hdb/driver/internal/protocol/encoding
+github.com/SAP/go-hdb/driver/internal/protocol/scanner
+github.com/SAP/go-hdb/driver/internal/rand
+github.com/SAP/go-hdb/driver/sqltrace
+github.com/SAP/go-hdb/driver/unicode/cesu8
 # github.com/ajstarks/svgo v0.0.0-20170507103333-2489f1e6d405
 ## explicit
 github.com/ajstarks/svgo
