@@ -13,7 +13,7 @@ require (
 	github.com/gdey/tbltest v0.0.0-20170331191646-af8abc47b052
 	github.com/go-redis/redis v6.9.0+incompatible
 	github.com/go-spatial/cobra v0.0.3-0.20181105183926-68194e4fbcc6
-	github.com/go-spatial/geom v0.0.0-20220426070044-6e8855d2cfe6
+	github.com/go-spatial/geom v0.0.0-20190821234737-802ab2533ab4
 	github.com/go-test/deep v0.0.0-20170429201529-f49763a6ea0a
 	github.com/golang/protobuf v1.4.3
 	github.com/jackc/pgproto3/v2 v2.2.0

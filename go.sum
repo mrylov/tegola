@@ -96,8 +96,8 @@ github.com/go-redis/redis v6.9.0+incompatible h1:TYmqCy++WwnKkrf+NJA2QuKdgkpeIr3
 github.com/go-redis/redis v6.9.0+incompatible/go.mod h1:NAIEuMOZ/fxfXJIrKDQDz8wamY7mA7PouImQ2Jvg6kA=
 github.com/go-spatial/cobra v0.0.3-0.20181105183926-68194e4fbcc6 h1:JZlproLIh4Xx/5QEd6pJq8g0vdwaaxufffEC6egRpVY=
 github.com/go-spatial/cobra v0.0.3-0.20181105183926-68194e4fbcc6/go.mod h1:f1ZQ97aEXWRWGYAZPB9oKTvG/PejtuPD3W/TUXkMlc8=
-github.com/go-spatial/geom v0.0.0-20220426070044-6e8855d2cfe6 h1:tTSXyqPd678jHHJgxIkWJAr5agI526nKm+22FHDVA94=
-github.com/go-spatial/geom v0.0.0-20220426070044-6e8855d2cfe6/go.mod h1:YU06tBGGstQCUX7vMuyF44RRneTdjGxOrp8OJHu4t9Q=
+github.com/go-spatial/geom v0.0.0-20190821234737-802ab2533ab4 h1:86C+kh/YYFdiZ+LY/zbNPcyJS9kEbbOngCDPCa3nHlA=
+github.com/go-spatial/geom v0.0.0-20190821234737-802ab2533ab4/go.mod h1:ysDXHAm45k1iWrWWOFdbjksiQFWmWLeFgbeuv6n7XiY=
 github.com/go-spatial/proj v0.2.0 h1:sii5Now3GFEyR9hV2SBJFWFz95s4xSaZmP0aYDk1K6c=
 github.com/go-spatial/proj v0.2.0/go.mod h1:ePHHp7ITVc4eIVW5sgG/0Eu9RMAGOQUgM/D1ZkccY+0=
 github.com/go-sql-driver/mysql v1.4.0/go.mod h1:zAC/RDZ24gD3HViQzih4MyKcchzm+sOG5ZlKdlhCg5w=
