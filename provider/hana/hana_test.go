@@ -726,12 +726,12 @@ func TestMVTForLayers(t *testing.T) {
 		}
 	}
 	tests := map[string]tcase{
-		"1": {
+		"SQL with fields and id": {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{
 					{
 						ConfigKeyFeatureIDField: "id",
-						ConfigKeyGeomType:       "multipolygon",
+						ConfigKeyGeomType:       "multilinestring",
 						ConfigKeyGeomField:      "geom",
 						ConfigKeyLayerName:      "rivers",
 						ConfigKeySQL:            `SELECT * FROM (SELECT "id", "featurecla", "geom".ST_Transform(3857) AS "geom" FROM "TEGOLACI"."ne_50m_rivers_lake_centerlines") AS sub WHERE !BBOX!`,
@@ -741,6 +741,55 @@ func TestMVTForLayers(t *testing.T) {
 			},
 			layerNames: []string{"rivers"},
 			mvtTile:    make([]byte, 373), // TODO: replace with 7619
+			tile:       provider.NewTile(2, 1, 1, 16, 4326),
+		},
+		"SQL with fields and without id": {
+			TCConfig: TCConfig{
+				LayerConfig: []map[string]interface{}{
+					{
+						ConfigKeyGeomType:  "multilinestring",
+						ConfigKeyGeomField: "geom",
+						ConfigKeyLayerName: "rivers",
+						ConfigKeySQL:       `SELECT * FROM (SELECT "id", "featurecla", "geom".ST_Transform(3857) AS "geom" FROM "TEGOLACI"."ne_50m_rivers_lake_centerlines") AS sub WHERE !BBOX!`,
+						ConfigKeySRID:      3857,
+					},
+				},
+			},
+			layerNames: []string{"rivers"},
+			mvtTile:    make([]byte, 373), // TODO: replace with 7619
+			tile:       provider.NewTile(2, 1, 1, 16, 4326),
+		},
+		"SQL with id only": {
+			TCConfig: TCConfig{
+				LayerConfig: []map[string]interface{}{
+					{
+						ConfigKeyFeatureIDField: "id",
+						ConfigKeyGeomType:       "multilinestring",
+						ConfigKeyGeomField:      "geom",
+						ConfigKeyLayerName:      "rivers",
+						ConfigKeySQL:            `SELECT * FROM (SELECT "id", "geom".ST_Transform(3857) AS "geom" FROM "TEGOLACI"."ne_50m_rivers_lake_centerlines") AS sub WHERE !BBOX!`,
+						ConfigKeySRID:           3857,
+					},
+				},
+			},
+			layerNames: []string{"rivers"},
+			mvtTile:    make([]byte, 333), // TODO: need to be adjusted
+			tile:       provider.NewTile(2, 1, 1, 16, 4326),
+		},
+		"SQL without any fields": {
+			TCConfig: TCConfig{
+				LayerConfig: []map[string]interface{}{
+					{
+						ConfigKeyGeomType:  "multilinestring",
+						ConfigKeyGeomField: "geom",
+						ConfigKeyLayerName: "rivers",
+						ConfigKeySQL:       `SELECT * FROM (SELECT "geom".ST_Transform(3857) AS "geom" FROM "TEGOLACI"."ne_50m_rivers_lake_centerlines") AS sub WHERE !BBOX!`,
+						ConfigKeySRID:      3857,
+					},
+				},
+			},
+			layerNames: []string{"rivers"},
+			mvtTile:    make([]byte, 15), // TODO: need to be adjusted
 			tile:       provider.NewTile(2, 1, 1, 16, 4326),
 		},
 	}

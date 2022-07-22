@@ -215,10 +215,14 @@ func genMVTSQL(l *Layer, fields []string, buffer uint, clipGeometry bool) (sql s
 		clip = "FALSE"
 	}
 
-	if l.IDFieldName() != "" {
-		sql = fmt.Sprintf(`SELECT ST_AsMVT(%v, %v.ST_AsMVTGeom(bounds => NEW ST_LINESTRING($4, $3), buffer => %v, clipgeom => %v) AS %v, layer_name => '%v', geom_name => '%v', feature_id_name => '%v') FROM (%v)`, strings.Join(flds, ","), geomFieldName, buffer, clip, geomFieldName, l.Name(), l.GeomFieldName(), l.IDFieldName(), l.sql)
+	if len(flds) == 0 {
+		sql = fmt.Sprintf(`SELECT ST_AsMVT(%v.ST_AsMVTGeom(bounds => NEW ST_LINESTRING($4, $3), buffer => %v, clipgeom => %v) AS %v, layer_name => '%v', geom_name => '%v') FROM (%v)`, geomFieldName, buffer, clip, geomFieldName, l.Name(), l.GeomFieldName(), l.sql)
 	} else {
-		sql = fmt.Sprintf(`SELECT ST_AsMVT(%v, %v.ST_AsMVTGeom(bounds => NEW ST_LINESTRING($4, $3), buffer => %v, clipgeom => %v) AS %v, layer_name => '%v', geom_name => '%v') FROM (%v)`, strings.Join(flds, ","), geomFieldName, buffer, clip, geomFieldName, l.Name(), l.GeomFieldName(), l.sql)
+		if l.IDFieldName() != "" {
+			sql = fmt.Sprintf(`SELECT ST_AsMVT(%v, %v.ST_AsMVTGeom(bounds => NEW ST_LINESTRING($4, $3), buffer => %v, clipgeom => %v) AS %v, layer_name => '%v', geom_name => '%v', feature_id_name => '%v') FROM (%v)`, strings.Join(flds, ","), geomFieldName, buffer, clip, geomFieldName, l.Name(), l.GeomFieldName(), l.IDFieldName(), l.sql)
+		} else {
+			sql = fmt.Sprintf(`SELECT ST_AsMVT(%v, %v.ST_AsMVTGeom(bounds => NEW ST_LINESTRING($4, $3), buffer => %v, clipgeom => %v) AS %v, layer_name => '%v', geom_name => '%v') FROM (%v)`, strings.Join(flds, ","), geomFieldName, buffer, clip, geomFieldName, l.Name(), l.GeomFieldName(), l.sql)
+		}
 	}
 	return sql, nil
 }
@@ -275,7 +279,7 @@ func getBBoxFilter(dbVersion uint, geomField string, srid uint64) string {
 }
 
 func getGeometryColumnSRID(pool *connectionPoolCollector, dbVersion uint, sql string, geomFieldName string) (srid int, err error) {
-	sqlQuery := strings.Replace(strings.Replace(sql, "!BOX!", bboxToken, -1), "!bbox!", bboxToken, -1)
+	sqlQuery := sanitizeSQL(sql)
 	sqlQuery = strings.Replace(sqlQuery, bboxToken, "1=1", -1)
 
 	sqlQuery = fmt.Sprintf("SELECT %[1]v.ST_SRID() FROM %[2]v WHERE %[1]v IS NOT NULL LIMIT 1", quoteIdentifier(geomFieldName), sqlQuery)
@@ -296,6 +300,11 @@ func getTileExtent(tile provider.Tile, withBuffer bool) (*geom.Extent, uint64) {
 	}
 
 	return tile.Extent()
+}
+
+func sanitizeSQL(sql string) string {
+	// convert !BOX! (MapServer) and !bbox! (Mapnik) to !BBOX! for compatibility
+	return strings.Replace(strings.Replace(sql, "!BOX!", bboxToken, -1), "!bbox!", bboxToken, -1)
 }
 
 // replaceTokens replaces tokens in the provided SQL string

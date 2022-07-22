@@ -495,8 +495,7 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 		}
 
 		if sql != "" {
-			// convert !BOX! (MapServer) and !bbox! (Mapnik) to !BBOX! for compatibility
-			sql := strings.Replace(strings.Replace(sql, "!BOX!", bboxToken, -1), "!bbox!", bboxToken, -1)
+			sql = sanitizeSQL(sql)
 			// make sure that the sql has a !BBOX! token
 			if !strings.Contains(sql, bboxToken) {
 				return nil, fmt.Errorf("SQL for layer (%v) %v is missing required token: %v", i, lName, bboxToken)
