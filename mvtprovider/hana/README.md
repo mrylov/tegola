@@ -129,6 +129,6 @@ center = [-90.2,38.6,3.0]  # where to center of the map (lon, lat, zoom)
 Testing is designed to work against a live SAP HANA database. To see how to set up a database check this [github actions script](https://github.com/go-spatial/tegola/blob/master/.github/worksflows/on_pr_push.yml). To run the HANA tests, the following environment variables need to be set:
 
 ```bash
-$ export TEGOLA_RUN_HANA_TESTS=yes
-$ export TEGOLA_HANA_CONNECTION_STRING="hdb://myuser:mypassword@something.hanacloud.ondemand.com:443?TLSInsecureSkipVerify"
+$ export RUN_HANA_TESTS=yes
+$ export HANA_CONNECTION_STRING="hdb://myuser:mypassword@something.hanacloud.ondemand.com:443?TLSInsecureSkipVerify"
 ```

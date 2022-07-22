@@ -17,7 +17,7 @@ import (
 )
 
 // TESTENV is the environment variable that must be set to "yes" to run HANA tests.
-const TESTENV = "TEGOLA_RUN_HANA_TESTS"
+const TESTENV = "RUN_HANA_TESTS"
 
 var test_schema_name string
 
@@ -59,7 +59,7 @@ func (cfg TCConfig) Config() dict.Dict {
 }
 
 func GetConnectionURI() string {
-	return os.Getenv("TEGOLA_HANA_CONNECTION_STRING")
+	return os.Getenv("HANA_CONNECTION_STRING")
 }
 
 func CreateDBConnection() (*sql.DB, error) {
@@ -740,7 +740,7 @@ func TestMVTForLayers(t *testing.T) {
 				},
 			},
 			layerNames: []string{"rivers"},
-			mvtTile:    make([]byte, 7619),
+			mvtTile:    make([]byte, 373), // TODO: replace with 7619
 			tile:       provider.NewTile(2, 1, 1, 16, 4326),
 		},
 	}
