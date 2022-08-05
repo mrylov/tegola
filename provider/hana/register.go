@@ -20,14 +20,12 @@ const (
 // trying to create a driver. This Provider supports the following fields
 // in the provided map[string]interface{} map:
 //
-// 	host (string): [Required] HANA database host
-// 	port (int): [Required] HANA database port (required)
-// 	database (string): [Required] HANA database name
-// 	user (string): [Required] HANA database user
-// 	password (string): [Required] HANA database password
+// 	uri (string): [Required] HANA connection string
+// 	name (string): [Required] Provider name is referenced from map layers
 // 	srid (int): [Optional] The default SRID for the provider. Defaults to WebMercator (3857) but also supports WGS84 (4326)
-// 	max_connections : [Optional] The max connections to maintain in the connection pool. Default is 100. 0 means no max.
-// 	layers (map[string]struct{})  — This is map of layers keyed by the layer name. supports the following properties
+// 	type (string): [Required] The type of data provider. must be "hana" to use this data provider
+// 	max_connections (int): [Optional] The max connections to maintain in the connection pool. Default is 100. 0 means no max.
+// 	layers (map[string]struct{})  — This is map of layers keyed by the layer name. Supports the following properties
 //
 // 		name (string): [Required] the name of the layer. This is used to reference this layer from map layers.
 // 		tablename (string): [*Required] the name of the database table to query against. Required if sql is not defined.
