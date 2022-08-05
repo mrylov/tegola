@@ -373,7 +373,7 @@ func CreateProvider(config dict.Dicter, providerType string) (*Provider, error) 
 	}
 
 	majorVersion, _ := strconv.Atoi(strings.Split(dbVersion, ".")[0])
-	if isMVT(providerType) && majorVersion != 4 {
+	if isMVT(providerType) && majorVersion < 4 {
 		return nil, fmt.Errorf("MVT provider is only available in HANA Cloud")
 	}
 
