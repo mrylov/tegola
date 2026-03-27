@@ -90,7 +90,10 @@ func isSrsRoundEarth(pool *connectionPoolCollector, srid uint64) bool {
 }
 
 func genGeomField(name string, providerType string) string {
-	return fmt.Sprintf(`%v.ST_AsBinary()  AS %[1]v`, quoteIdentifier(name))
+	if providerType == "hana" {
+		return fmt.Sprintf(`%v.ST_AsBinary() AS %[1]v`, quoteIdentifier(name))
+	}
+	return quoteIdentifier(name)
 }
 
 func getLayerSQL(tblname string) string {

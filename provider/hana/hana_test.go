@@ -517,6 +517,23 @@ func TestMVTForLayers(t *testing.T) {
 		}
 	}
 	tests := map[string]tcase{
+		"Table name with custom fields": {
+			TCConfig: TCConfig{
+				LayerConfig: []map[string]interface{}{
+					{
+						hana.ConfigKeyLayerName:      "rivers",
+						hana.ConfigKeyTablename:      `"TEGOLACI"."ne_50m_rivers_lake_centerlines_3857"`,
+						hana.ConfigKeyGeomField:      "geom",
+						hana.ConfigKeyGeomType:       "multilinestring",
+						hana.ConfigKeyFeatureIDField: "id",
+						hana.ConfigKeyFields:         []string{"id", "featurecla"},
+					},
+				},
+			},
+			layerNames: []string{"rivers"},
+			mvtTile:    make([]byte, 7619),
+			tile:       provider.NewTile(2, 1, 1, 16, 4326),
+		},
 		"SQL with fields and id": {
 			TCConfig: TCConfig{
 				LayerConfig: []map[string]interface{}{
